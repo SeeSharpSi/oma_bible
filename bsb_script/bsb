@@ -1,0 +1,564 @@
+#!/usr/bin/env bash
+# bsb - quick BSB verse lookup from BSB.sqlite
+# Usage:
+#   bsb [-n|--no-reference] [-j|--join] <book> <chapter[:verse][-chapter[:verse]]> [ <book> <chapter> ... ]
+#   bsb John 1:1
+#   bsb --no-reference John 1:1
+#   bsb -n Proverbs 3:3-5
+#   bsb Luke 2:3-5:12
+#   bsb lk 1:9-10
+#   bsb Gen 3
+#   bsb Luke 3:1-2 John 5
+# Options:
+#   -n, --no-reference  omit chapter:verse prefix from output
+#   -j, --join          join multiple verses on one line (no newlines between verses)
+
+# locate DB (project root, alongside script)
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+DB=""
+for cand in "$SCRIPT_DIR/BSB.sqlite" "./BSB.sqlite" "$(dirname "${BASH_SOURCE[0]:-$0}")/BSB.sqlite" "BSB.sqlite"; do
+  if [[ -f "$cand" ]]; then DB="$cand"; break; fi
+done
+# also check translations_sqlite fallback
+if [[ -z "$DB" && -f "$SCRIPT_DIR/translations/translations_sqlite/BSB.sqlite" ]]; then
+  DB="$SCRIPT_DIR/translations/translations_sqlite/BSB.sqlite"
+fi
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "error: sqlite3 not found" >&2
+  exit 1
+fi
+
+if [[ -z "$DB" || ! -f "$DB" ]]; then
+  echo "error: BSB.sqlite not found (looked in $SCRIPT_DIR/BSB.sqlite)" >&2
+  exit 1
+fi
+
+# ---------- CLI flags ----------
+NO_REF=0
+NO_NEWLINE=0
+FILTERED_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    -n|--no-reference|--no-references|--no-refs|--no-ref|--no-verse-numbers|--no-verse-number|--no-verses|--no-verse|--only-text|--plain)
+      NO_REF=1
+      ;;
+    -j|--join|--joined|--no-newline|--no-newlines|--no-nl|--no-new-line|--no-new-lines|--single-line|--one-line|--inline|--oneline|--join-lines|--join-verse|--join-verses)
+      NO_NEWLINE=1
+      ;;
+    -h|--help)
+      echo "Usage: $0 [-n|--no-reference] [-j|--join] <book> <chapter[:verse][-chapter[:verse]]> [ <book> <chapter> ... ]" >&2
+      echo "Options:" >&2
+      echo "  -n, --no-reference       omit chapter:verse prefix from output" >&2
+      echo "  -j, --join               join multiple verses on one line (no newlines between verses)" >&2
+      echo "  -h, --help               show this help" >&2
+      echo "Examples:" >&2
+      echo "  $0 John 1:1" >&2
+      echo "  $0 --no-reference John 1:1" >&2
+      echo "  $0 -n Proverbs 3:3-5" >&2
+      echo "  $0 Luke 2:3-5:12" >&2
+      echo "  $0 lk 1:9-10" >&2
+      echo "  $0 Luke 3:1-2 John 5" >&2
+      echo "  $0 -j John 1:9-10             # single line" >&2
+      echo "  $0 -n -j Proverbs 3:3-5       # combinable with -n" >&2
+      exit 0
+      ;;
+    --)
+      continue
+      ;;
+    -nj|-jn)
+      NO_REF=1
+      NO_NEWLINE=1
+      ;;
+    --*)
+      echo "error: unknown option '$arg'" >&2
+      exit 1
+      ;;
+    -*)
+      # expand combined short flags like -nj, -jn
+      _flags="${arg#-}"
+      _ok=1
+      for (( _k=0; _k<${#_flags}; _k++ )); do
+        _ch="${_flags:_k:1}"
+        case "$_ch" in
+          n) NO_REF=1 ;;
+          j) NO_NEWLINE=1 ;;
+          h)
+            echo "Usage: $0 [-n|--no-reference] [-j|--join] <book> <chapter[:verse][-chapter[:verse]]> [ <book> <chapter> ... ]" >&2
+            echo "Options:" >&2
+            echo "  -n, --no-reference       omit chapter:verse prefix from output" >&2
+            echo "  -j, --join               join multiple verses on one line (no newlines between verses)" >&2
+            echo "  -h, --help               show this help" >&2
+            exit 0
+            ;;
+          *) _ok=0; break ;;
+        esac
+      done
+      if (( _ok )); then
+        continue
+      fi
+      echo "error: unknown option '$arg'" >&2
+      exit 1
+      ;;
+    *)
+      FILTERED_ARGS+=("$arg")
+      ;;
+  esac
+done
+
+if [[ ${#FILTERED_ARGS[@]} -eq 0 ]]; then
+  echo "Usage: $0 [-n|--no-reference] [-j|--join] <book> <chapter[:verse][-chapter[:verse]]> [ <book> <chapter> ... ]" >&2
+  echo "Options:" >&2
+  echo "  -n, --no-reference       omit chapter:verse prefix from output" >&2
+  echo "  -j, --join               join multiple verses on one line (no newlines between verses)" >&2
+  echo "Examples:" >&2
+  echo "  $0 John 1:1" >&2
+  echo "  $0 --no-reference John 1:1" >&2
+  echo "  $0 -n Proverbs 3:3-5" >&2
+  echo "  $0 Luke 2:3-5:12" >&2
+  echo "  $0 lk 1:9-10" >&2
+  echo "  $0 Luke 3:1-2 John 5" >&2
+  echo "  $0 -j John 1:9-10" >&2
+  echo "  $0 -n -j John 1:9-10" >&2
+  exit 1
+fi
+
+if (( NO_REF )); then
+  SELECT_EXPR="text"
+else
+  SELECT_EXPR="chapter || ':' || verse || ' ' || text"
+fi
+
+# buffer for joined output
+ALL_LINES=()
+emit_result() {
+  local _res="$1"
+  if (( NO_NEWLINE )); then
+    while IFS= read -r _line; do
+      [[ -n "$_line" ]] && ALL_LINES+=("$_line")
+    done <<< "$_res"
+  else
+    echo "$_res"
+  fi
+}
+
+# ---------- book mapping ----------
+declare -A BOOKS
+# helper to add alias
+_add() { BOOKS["$1"]="$2"; }
+
+# 1 Genesis
+_add "genesis" 1; _add "gen" 1; _add "ge" 1; _add "gn" 1
+# 2 Exodus
+_add "exodus" 2; _add "exo" 2; _add "exod" 2; _add "ex" 2
+# 3 Leviticus
+_add "leviticus" 3; _add "lev" 3; _add "le" 3; _add "lv" 3
+# 4 Numbers
+_add "numbers" 4; _add "num" 4; _add "nu" 4; _add "nm" 4; _add "nb" 4
+# 5 Deuteronomy
+_add "deuteronomy" 5; _add "deut" 5; _add "de" 5; _add "dt" 5; _add "deu" 5; _add "du" 5; _add "deuteronomium" 5
+# 6 Joshua
+_add "joshua" 6; _add "josh" 6; _add "jos" 6; _add "jsh" 6
+# 7 Judges
+_add "judges" 7; _add "judg" 7; _add "jdg" 7; _add "jg" 7; _add "jgs" 7; _add "jdgs" 7
+# 8 Ruth
+_add "ruth" 8; _add "ru" 8; _add "rut" 8; _add "rth" 8; _add "rt" 8
+# 9 1 Samuel
+_add "1 samuel" 9; _add "1samuel" 9; _add "1 sam" 9; _add "1sam" 9; _add "1 sa" 9; _add "1sa" 9; _add "1 sm" 9; _add "1sm" 9; _add "1 s" 9; _add "1s" 9; _add "1st samuel" 9; _add "first samuel" 9
+# 10 2 Samuel
+_add "2 samuel" 10; _add "2samuel" 10; _add "2 sam" 10; _add "2sam" 10; _add "2 sa" 10; _add "2sa" 10; _add "2 sm" 10; _add "2sm" 10; _add "2 s" 10; _add "2s" 10; _add "2nd samuel" 10; _add "second samuel" 10
+# 11 1 Kings
+_add "1 kings" 11; _add "1kings" 11; _add "1 king" 11; _add "1king" 11; _add "1 kgs" 11; _add "1kgs" 11; _add "1 ki" 11; _add "1ki" 11; _add "1 kin" 11; _add "1kin" 11; _add "1 k" 11; _add "1k" 11
+# 12 2 Kings
+_add "2 kings" 12; _add "2kings" 12; _add "2 king" 12; _add "2king" 12; _add "2 kgs" 12; _add "2kgs" 12; _add "2 ki" 12; _add "2ki" 12; _add "2 kin" 12; _add "2kin" 12; _add "2 k" 12; _add "2k" 12
+# 13 1 Chronicles
+_add "1 chronicles" 13; _add "1chronicles" 13; _add "1 chron" 13; _add "1chron" 13; _add "1 chr" 13; _add "1chr" 13; _add "1 ch" 13; _add "1ch" 13; _add "1 chro" 13; _add "1chro" 13
+# 14 2 Chronicles
+_add "2 chronicles" 14; _add "2chronicles" 14; _add "2 chron" 14; _add "2chron" 14; _add "2 chr" 14; _add "2chr" 14; _add "2 ch" 14; _add "2ch" 14; _add "2 chro" 14; _add "2chro" 14
+# 15 Ezra
+_add "ezra" 15; _add "ezr" 15; _add "ez" 15; _add "esr" 15
+# 16 Nehemiah
+_add "nehemiah" 16; _add "neh" 16; _add "ne" 16
+# 17 Esther
+_add "esther" 17; _add "est" 17; _add "es" 17; _add "esth" 17
+# 18 Job
+_add "job" 18; _add "jb" 18
+# 19 Psalms
+_add "psalms" 19; _add "psalm" 19; _add "ps" 19; _add "psa" 19; _add "psm" 19; _add "pss" 19; _add "pslm" 19; _add "psalmus" 19
+# 20 Proverbs
+_add "proverbs" 20; _add "proverb" 20; _add "prov" 20; _add "pro" 20; _add "pr" 20; _add "prv" 20
+# 21 Ecclesiastes
+_add "ecclesiastes" 21; _add "ecc" 21; _add "eccl" 21; _add "ec" 21; _add "eccles" 21; _add "qoh" 21; _add "qoheleth" 21
+# 22 Song of Solomon
+_add "song of solomon" 22; _add "song of songs" 22; _add "songofsolomon" 22; _add "songofsongs" 22; _add "song" 22; _add "sos" 22; _add "so" 22; _add "sng" 22; _add "cant" 22; _add "canticles" 22; _add "canticle" 22; _add "canticle of canticles" 22; _add "ca" 22; _add "sg" 22
+# 23 Isaiah
+_add "isaiah" 23; _add "isa" 23; _add "is" 23
+# 24 Jeremiah
+_add "jeremiah" 24; _add "jer" 24; _add "je" 24; _add "jr" 24
+# 25 Lamentations
+_add "lamentations" 25; _add "lam" 25; _add "la" 25; _add "lamentations of jeremiah" 25
+# 26 Ezekiel
+_add "ezekiel" 26; _add "ezek" 26; _add "eze" 26; _add "ek" 26; _add "ezk" 26
+# 27 Daniel
+_add "daniel" 27; _add "dan" 27; _add "da" 27; _add "dn" 27
+# 28 Hosea
+_add "hosea" 28; _add "hos" 28; _add "ho" 28; _add "osee" 28
+# 29 Joel
+_add "joel" 29; _add "jl" 29; _add "jol" 29; _add "joe" 29; _add "jo" 29
+# 30 Amos
+_add "amos" 30; _add "am" 30; _add "amo" 30
+# 31 Obadiah
+_add "obadiah" 31; _add "oba" 31; _add "ob" 31; _add "obad" 31; _add "abdias" 31
+# 32 Jonah
+_add "jonah" 32; _add "jon" 32; _add "jnh" 32; _add "jonas" 32
+# 33 Micah
+_add "micah" 33; _add "mic" 33; _add "mc" 33; _add "mi" 33
+# 34 Nahum
+_add "nahum" 34; _add "nah" 34; _add "na" 34; _add "nam" 34
+# 35 Habakkuk
+_add "habakkuk" 35; _add "hab" 35; _add "hb" 35
+# 36 Zephaniah
+_add "zephaniah" 36; _add "zeph" 36; _add "zep" 36; _add "zp" 36; _add "sophonias" 36
+# 37 Haggai
+_add "haggai" 37; _add "hag" 37; _add "hg" 37; _add "aggaeus" 37
+# 38 Zechariah
+_add "zechariah" 38; _add "zech" 38; _add "zec" 38; _add "zc" 38
+# 39 Malachi
+_add "malachi" 39; _add "mal" 39; _add "ml" 39
+# 40 Matthew
+_add "matthew" 40; _add "matt" 40; _add "mt" 40; _add "mat" 40
+# 41 Mark
+_add "mark" 41; _add "mk" 41; _add "mrk" 41; _add "mr" 41; _add "mar" 41
+# 42 Luke
+_add "luke" 42; _add "lk" 42; _add "lu" 42; _add "luk" 42
+# 43 John
+_add "john" 43; _add "jn" 43; _add "joh" 43; _add "jhn" 43; _add "jo" 43
+# 44 Acts
+_add "acts" 44; _add "ac" 44; _add "act" 44; _add "acts of the apostles" 44
+# 45 Romans
+_add "romans" 45; _add "rom" 45; _add "ro" 45; _add "rm" 45
+# 46 1 Corinthians
+_add "1 corinthians" 46; _add "1corinthians" 46; _add "1 cor" 46; _add "1cor" 46; _add "1 co" 46; _add "1co" 46; _add "1 c" 46; _add "1c" 46; _add "1 corinthian" 46
+# 47 2 Corinthians
+_add "2 corinthians" 47; _add "2corinthians" 47; _add "2 cor" 47; _add "2cor" 47; _add "2 co" 47; _add "2co" 47; _add "2 c" 47; _add "2c" 47
+# 48 Galatians
+_add "galatians" 48; _add "gal" 48; _add "ga" 48
+# 49 Ephesians
+_add "ephesians" 49; _add "eph" 49; _add "ep" 49; _add "ephes" 49
+# 50 Philippians
+_add "philippians" 50; _add "phil" 50; _add "php" 50; _add "pp" 50; _add "philip" 50
+# 51 Colossians
+_add "colossians" 51; _add "col" 51; _add "co" 51; _add "colos" 51
+# 52 1 Thessalonians
+_add "1 thessalonians" 52; _add "1thessalonians" 52; _add "1 thess" 52; _add "1thess" 52; _add "1 thes" 52; _add "1thes" 52; _add "1 th" 52; _add "1th" 52; _add "1 ths" 52; _add "1ths" 52
+# 53 2 Thessalonians
+_add "2 thessalonians" 53; _add "2thessalonians" 53; _add "2 thess" 53; _add "2thess" 53; _add "2 thes" 53; _add "2thes" 53; _add "2 th" 53; _add "2th" 53; _add "2 ths" 53; _add "2ths" 53
+# 54 1 Timothy
+_add "1 timothy" 54; _add "1timothy" 54; _add "1 tim" 54; _add "1tim" 54; _add "1 ti" 54; _add "1ti" 54; _add "1 tm" 54; _add "1tm" 54
+# 55 2 Timothy
+_add "2 timothy" 55; _add "2timothy" 55; _add "2 tim" 55; _add "2tim" 55; _add "2 ti" 55; _add "2ti" 55; _add "2 tm" 55; _add "2tm" 55
+# 56 Titus
+_add "titus" 56; _add "tit" 56; _add "ti" 56; _add "tt" 56
+# 57 Philemon
+_add "philemon" 57; _add "philem" 57; _add "phm" 57; _add "pm" 57; _add "phlm" 57; _add "phi" 57; _add "phile" 57
+# 58 Hebrews
+_add "hebrews" 58; _add "heb" 58; _add "he" 58
+# 59 James
+_add "james" 59; _add "jam" 59; _add "ja" 59; _add "jas" 59; _add "jm" 59
+# 60 1 Peter
+_add "1 peter" 60; _add "1peter" 60; _add "1 pet" 60; _add "1pet" 60; _add "1 pe" 60; _add "1pe" 60; _add "1 pt" 60; _add "1pt" 60; _add "1 p" 60; _add "1p" 60
+# 61 2 Peter
+_add "2 peter" 61; _add "2peter" 61; _add "2 pet" 61; _add "2pet" 61; _add "2 pe" 61; _add "2pe" 61; _add "2 pt" 61; _add "2pt" 61; _add "2 p" 61; _add "2p" 61
+# 62 1 John
+_add "1 john" 62; _add "1john" 62; _add "1 jn" 62; _add "1jn" 62; _add "1 jhn" 62; _add "1jhn" 62; _add "1 joh" 62; _add "1joh" 62; _add "1 j" 62; _add "1j" 62; _add "1 jo" 62; _add "1jo" 62
+# 63 2 John
+_add "2 john" 63; _add "2john" 63; _add "2 jn" 63; _add "2jn" 63; _add "2 jhn" 63; _add "2jhn" 63; _add "2 joh" 63; _add "2joh" 63; _add "2 j" 63; _add "2j" 63; _add "2 jo" 63; _add "2jo" 63
+# 64 3 John
+_add "3 john" 64; _add "3john" 64; _add "3 jn" 64; _add "3jn" 64; _add "3 jhn" 64; _add "3jhn" 64; _add "3 joh" 64; _add "3joh" 64; _add "3 j" 64; _add "3j" 64; _add "3 jo" 64; _add "3jo" 64
+# 65 Jude
+_add "jude" 65; _add "jud" 65; _add "jd" 65
+# 66 Revelation
+_add "revelation" 66; _add "revelations" 66; _add "rev" 66; _add "re" 66; _add "revs" 66; _add "apocalypse" 66; _add "apoc" 66; _add "rv" 66; _add "the revelation" 66
+
+MAX_BOOK_TOKENS=4
+
+normalize() {
+  # lower, remove periods, trim, collapse spaces
+  echo "$1" | tr '[:upper:]' '[:lower:]' | tr -d '.' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/[[:space:]]+/ /g'
+}
+
+# Try to find book starting at TOKENS[idx], returns "book_num len" or empty
+find_book_at() {
+  local start=$1
+  local n=${#TOKENS[@]}
+  local try_len
+  for ((try_len=MAX_BOOK_TOKENS; try_len>=1; try_len--)); do
+    if (( start + try_len > n )); then continue; fi
+    local cand=""
+    local i
+    for ((i=0; i<try_len; i++)); do
+      if [[ -z "$cand" ]]; then cand="${TOKENS[start+i]}"
+      else cand="$cand ${TOKENS[start+i]}"
+      fi
+    done
+    local norm
+    norm=$(normalize "$cand")
+    if [[ -n "${BOOKS[$norm]+x}" ]]; then
+      echo "${BOOKS[$norm]} $try_len"
+      return 0
+    fi
+  done
+  return 1
+}
+
+query_spec() {
+  local book=$1
+  local spec=$2
+  spec=$(echo "$spec" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+  [[ -z "$spec" ]] && return 0
+
+  # validation: spec should be like digits with : and -
+  local sql=""
+  if [[ "$spec" == *-* ]]; then
+    local left="${spec%%-*}"
+    local right="${spec#*-}"
+    left=$(echo "$left" | xargs)
+    right=$(echo "$right" | xargs)
+    # if extra dashes in right (e.g., malformed), join remainder as right; but we already took first dash, if right still contains dash, treat as invalid and query left only?
+    if [[ "$left" == *:* && "$right" == *:* ]]; then
+      local lc="${left%%:*}"
+      local lv="${left#*:}"
+      local rc="${right%%:*}"
+      local rv="${right#*:}"
+      # ensure numeric
+      if ! [[ "$lc" =~ ^[0-9]+$ && "$lv" =~ ^[0-9]+$ && "$rc" =~ ^[0-9]+$ && "$rv" =~ ^[0-9]+$ ]]; then
+        echo "warning: invalid reference '$spec'" >&2
+        return 1
+      fi
+      if (( lc == rc )); then
+        # same chapter verse range
+        local v_low=$lv
+        local v_high=$rv
+        if (( v_low > v_high )); then local tmp=$v_low; v_low=$v_high; v_high=$tmp; fi
+        sql="SELECT $SELECT_EXPR FROM verses WHERE book=$book AND chapter=$lc AND verse BETWEEN $v_low AND $v_high ORDER BY verse;"
+      else
+        # ensure lc < rc ; swap if needed?
+        if (( lc > rc )); then
+          # swap to make ordered range
+          local tmpc=$lc; local tmpv=$lv; lc=$rc; lv=$rv; rc=$tmpc; rv=$tmpv
+        fi
+        sql="SELECT $SELECT_EXPR FROM verses WHERE book=$book AND ((chapter=$lc AND verse >= $lv) OR (chapter > $lc AND chapter < $rc) OR (chapter=$rc AND verse <= $rv)) ORDER BY chapter, verse;"
+      fi
+    elif [[ "$left" == *:* && "$right" != *:* ]]; then
+      local ch="${left%%:*}"
+      local v1="${left#*:}"
+      local v2="$right"
+      if ! [[ "$ch" =~ ^[0-9]+$ && "$v1" =~ ^[0-9]+$ && "$v2" =~ ^[0-9]+$ ]]; then
+        echo "warning: invalid reference '$spec'" >&2
+        return 1
+      fi
+      if (( v1 > v2 )); then local tmp=$v1; v1=$v2; v2=$tmp; fi
+      sql="SELECT $SELECT_EXPR FROM verses WHERE book=$book AND chapter=$ch AND verse BETWEEN $v1 AND $v2 ORDER BY verse;"
+    elif [[ "$left" != *:* && "$right" != *:* ]]; then
+      local c1="$left"
+      local c2="$right"
+      if ! [[ "$c1" =~ ^[0-9]+$ && "$c2" =~ ^[0-9]+$ ]]; then
+        echo "warning: invalid reference '$spec'" >&2
+        return 1
+      fi
+      if (( c1 > c2 )); then local tmp=$c1; c1=$c2; c2=$tmp; fi
+      sql="SELECT $SELECT_EXPR FROM verses WHERE book=$book AND chapter BETWEEN $c1 AND $c2 ORDER BY chapter, verse;"
+    else
+      # left no colon, right has colon: e.g., 3-5:12
+      local c1="$left"
+      local rc="${right%%:*}"
+      local rv="${right#*:}"
+      if ! [[ "$c1" =~ ^[0-9]+$ && "$rc" =~ ^[0-9]+$ && "$rv" =~ ^[0-9]+$ ]]; then
+        echo "warning: invalid reference '$spec'" >&2
+        return 1
+      fi
+      if (( c1 > rc )); then
+        local tmp=$c1; c1=$rc; rc=$tmp
+        # rv stays with rc which is now larger; but original semantics ambiguous, just use same rv
+      fi
+      if (( c1 == rc )); then
+        sql="SELECT $SELECT_EXPR FROM verses WHERE book=$book AND chapter=$c1 AND verse <= $rv ORDER BY verse;"
+      else
+        sql="SELECT $SELECT_EXPR FROM verses WHERE book=$book AND ((chapter=$c1) OR (chapter > $c1 AND chapter < $rc) OR (chapter=$rc AND verse <= $rv)) ORDER BY chapter, verse;"
+      fi
+    fi
+  else
+    if [[ "$spec" == *:* ]]; then
+      local ch="${spec%%:*}"
+      local v="${spec#*:}"
+      if ! [[ "$ch" =~ ^[0-9]+$ && "$v" =~ ^[0-9]+$ ]]; then
+        echo "warning: invalid reference '$spec'" >&2
+        return 1
+      fi
+      sql="SELECT $SELECT_EXPR FROM verses WHERE book=$book AND chapter=$ch AND verse=$v ORDER BY verse;"
+    else
+      local ch="$spec"
+      if ! [[ "$ch" =~ ^[0-9]+$ ]]; then
+        echo "warning: invalid reference '$spec'" >&2
+        return 1
+      fi
+      sql="SELECT $SELECT_EXPR FROM verses WHERE book=$book AND chapter=$ch ORDER BY verse;"
+    fi
+  fi
+
+  # execute
+  local result
+  result=$(sqlite3 "$DB" "$sql")
+  if [[ -z "$result" ]]; then
+    echo "warning: no verses found for book $book spec '$spec'" >&2
+  else
+    emit_result "$result"
+  fi
+}
+
+# ---------- preprocess input ----------
+INPUT_RAW="${FILTERED_ARGS[*]}"
+# Normalize word/Roman ordinals before digit-letter spacing (fixes 1st/2nd/3rd, I/II/III, First/Second/Third)
+# Order: glued forms (longest first) interleaved with conversion to avoid double-split
+PROCESSED=$(echo "$INPUT_RAW" | sed -E '
+  s/\bIII([A-Za-z])/III \1/gI
+  s/\bIII\b/3/gI
+  s/\bII([A-Za-z])/II \1/gI
+  s/\bII\b/2/gI
+  s/\bI([A-Za-z])/I \1/gI
+  s/\bI\b/1/gI
+  s/\bFirst([A-Za-z])/First \1/gI
+  s/\bSecond([A-Za-z])/Second \1/gI
+  s/\bThird([A-Za-z])/Third \1/gI
+  s/\bFirst\b/1/gI
+  s/\bSecond\b/2/gI
+  s/\bThird\b/3/gI
+  s/\b1st([A-Za-z])/1st \1/gI
+  s/\b2nd([A-Za-z])/2nd \1/gI
+  s/\b3rd([A-Za-z])/3rd \1/gI
+  s/\b1st\b/1/gI
+  s/\b2nd\b/2/gI
+  s/\b3rd\b/3/gI
+  s/([A-Za-z])([0-9])/\1 \2/g
+  s/([0-9])([A-Za-z])/\1 \2/g
+')
+# collapse multiple spaces (sed already); now split into TOKENS
+read -ra TOKENS <<< "$PROCESSED"
+
+# ---------- main loop ----------
+idx=0
+found_any=0
+output_all=""
+
+# we will directly output to stdout as we go, but track if any output
+while (( idx < ${#TOKENS[@]} )); do
+  # find book at idx
+  book_info=$(find_book_at "$idx")
+  if [[ -z "$book_info" ]]; then
+    echo "error: unknown book '${TOKENS[idx]}' at position $((idx+1)). Try: $0 John 1:1" >&2
+    # skip token
+    idx=$((idx+1))
+    continue
+  fi
+  book_num=$(echo "$book_info" | cut -d' ' -f1)
+  book_len=$(echo "$book_info" | cut -d' ' -f2)
+
+  # find next book start
+  next_book_idx=-1
+  search_start=$((idx + book_len))
+  for ((j=search_start; j<${#TOKENS[@]}; j++)); do
+    if find_book_at "$j" >/dev/null; then
+      next_book_idx=$j
+      break
+    fi
+  done
+
+  spec_end=$(( next_book_idx == -1 ? ${#TOKENS[@]} : next_book_idx ))
+  spec_start=$search_start
+  spec_count=$((spec_end - spec_start))
+
+  if (( spec_count == 0 )); then
+    echo "warning: no chapter/verse given for book '${TOKENS[idx]}' (book $book_num), showing whole book" >&2
+    # whole book
+    _wb_result=$(sqlite3 "$DB" "SELECT $SELECT_EXPR FROM verses WHERE book=$book_num ORDER BY chapter, verse;")
+    if [[ -n "$_wb_result" ]]; then
+      emit_result "$_wb_result"
+    fi
+    found_any=1
+    idx=$spec_end
+    continue
+  fi
+
+  # iterate over raw spec tokens belonging to this book
+  for ((s=spec_start; s<spec_end; s++)); do
+    raw="${TOKENS[s]}"
+    # skip empty
+    [[ -z "$raw" ]] && continue
+    # split raw by comma/semicolon into parts (inheritance only within raw)
+    # use IFS split preserving empty removal
+    IFS=',;' read -ra PARTS <<< "$raw"
+    last_ch=""
+    # need to know if raw had comma: parts length >1 indicates inheritance context
+    for part in "${PARTS[@]}"; do
+      part=$(echo "$part" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+      [[ -z "$part" ]] && continue
+      # determine handling with last_ch inheritance for comma case only
+      if [[ "$part" == *:* ]]; then
+        # contains colon, update last_ch for next comma parts
+        # extract left chapter before dash if present
+        tmp_left="${part%%-*}"
+        if [[ "$tmp_left" == *:* ]]; then
+          last_ch="${tmp_left%%:*}"
+        else
+          # part like "3:1" no dash
+          last_ch="${part%%:*}"
+          # if part has dash with right colon? e.g., "3-5:2" left no colon but part overall has colon via right
+          # then last_ch not accurate but okay
+          # fallback: find first chapter number before colon
+          if [[ -z "$last_ch" || ! "$last_ch" =~ ^[0-9]+$ ]]; then
+            # try to extract first number before colon anywhere
+            last_ch=$(echo "$part" | grep -oE '[0-9]+:' | head -1 | tr -d ':')
+          fi
+        fi
+        # query directly
+        query_spec "$book_num" "$part"
+        found_any=1
+      else
+        # no colon
+        if [[ "$part" == *-* ]]; then
+          # dash without colon
+          if [[ -n "$last_ch" && ${#PARTS[@]} -gt 1 ]]; then
+            # inheritance: treat as verse range in last_ch
+            # reconstruct as last_ch:part
+            query_spec "$book_num" "${last_ch}:${part}"
+          else
+            # treat as chapter range
+            query_spec "$book_num" "$part"
+          fi
+          found_any=1
+          # last_ch stays?
+        else
+          # single number without colon
+          if [[ -n "$last_ch" && ${#PARTS[@]} -gt 1 ]]; then
+            query_spec "$book_num" "${last_ch}:${part}"
+          else
+            query_spec "$book_num" "$part"
+          fi
+          found_any=1
+          # if parts >1, keep last_ch; else single chapter reference may be whole chapter, not verse, so no update?
+        fi
+      fi
+    done
+  done
+
+  idx=$spec_end
+done
+
+if (( NO_NEWLINE && ${#ALL_LINES[@]} > 0 )); then
+  # join with single space
+  IFS=' ' echo "${ALL_LINES[*]}"
+fi
+
+if (( found_any == 0 )); then
+  exit 1
+fi
