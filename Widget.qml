@@ -38,6 +38,18 @@ BarWidget {
 
   readonly property bool popoutSwitchClosing: false
 
+  // Display structure only: resultText lays each group out as a reference
+  // header line followed by its verses, groups separated by a blank line.
+  // Splitting that back apart lets the panel style references and verses
+  // differently.
+  readonly property var resultGroups: {
+    if (!root.resultText) return []
+    return root.resultText.split("\n\n").map(function(block) {
+      const lines = block.split("\n")
+      return { ref: lines[0].replace(/;\s*$/, ""), body: lines.slice(1).join("\n") }
+    })
+  }
+
   function lookup() {
     const q = inputField.text.trim()
     if (!q) {
@@ -102,38 +114,48 @@ BarWidget {
         id: mainColumn
         anchors.fill: parent
         anchors.margins: Style.spacing.sm
-        spacing: Style.space(12)
+        spacing: Style.space(10)
 
         // Header
-        RowLayout {
+        ColumnLayout {
           Layout.fillWidth: true
           spacing: Style.space(8)
 
-          Text {
-            text: "Bible"
-            color: Color.popups.text
-            font.family: Style.font.family
-            font.pixelSize: Style.font.title
-            font.bold: true
-            Layout.alignment: Qt.AlignVCenter
-          }
-          Text {
-            text: "BSB"
-            color: Qt.darker(Color.popups.text, 1.4)
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            Layout.alignment: Qt.AlignVCenter
-          }
-          Item { Layout.fillWidth: true }
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(6)
 
-          // Close affordance
-          Button {
-            text: "✕"
-            implicitWidth: Style.space(28)
-            implicitHeight: Style.space(28)
-            fontSize: Style.font.caption
-            onClicked: root.close()
+            Text {
+              text: "Bible"
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.title
+              font.bold: true
+              Layout.alignment: Qt.AlignVCenter
+            }
+            Text {
+              text: "BSB"
+              color: Color.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1
+              font.capitalization: Font.SmallCaps
+              Layout.alignment: Qt.AlignVCenter
+              Layout.topMargin: Style.space(3)
+            }
+            Item { Layout.fillWidth: true }
+
+            // Close affordance
+            Button {
+              text: "✕"
+              implicitWidth: Style.space(28)
+              implicitHeight: Style.space(28)
+              fontSize: Style.font.caption
+              onClicked: root.close()
+            }
           }
+
+          PanelSeparator {}
         }
 
         // Search row
@@ -162,17 +184,6 @@ BarWidget {
           }
         }
 
-        Text {
-          Layout.fillWidth: true
-          text: "Examples: <b>John 3:16</b> &nbsp; <b>Jn 3:16</b> &nbsp; <b>Gen 1:1-3</b> &nbsp; <b>Ps 23</b> &nbsp; <b>1Jn 3:16</b>"
-          textFormat: Text.RichText
-          wrapMode: Text.Wrap
-          color: Qt.darker(Color.popups.text, 1.6)
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          opacity: 0.85
-        }
-
         // Status / loading
         Text {
           visible: root.isLoading
@@ -194,47 +205,91 @@ BarWidget {
           font.pixelSize: Style.font.body
         }
 
-        // Result area with scroll
-        Flickable {
-          id: resultFlick
-          visible: !root.isLoading && root.resultText !== ""
+        // Result area with scroll: each reference group gets a styled
+        // header followed by its verses.
+        Item {
+          visible: !root.isLoading && root.resultGroups.length > 0
           Layout.fillWidth: true
-          Layout.preferredHeight: Math.min(Math.max(resultTextItem.implicitHeight + Style.space(16), Style.space(80)), Style.space(380))
+          Layout.preferredHeight: Math.min(Math.max(resultColumn.implicitHeight + Style.space(16), Style.space(80)), Style.space(380))
           Layout.maximumHeight: Style.space(380)
-          contentHeight: resultTextItem.implicitHeight + Style.space(16)
-          contentWidth: width
-          clip: true
-          boundsBehavior: Flickable.StopAtBounds
 
-          Text {
-            id: resultTextItem
-            width: resultFlick.width - Style.space(8)
-            x: Style.space(4)
-            y: Style.space(8)
-            text: root.resultText
-            wrapMode: Text.Wrap
-            textFormat: Text.PlainText
-            color: Color.popups.text
-            font.family: Style.font.family
-            font.pixelSize: Style.font.body
-            lineHeight: 1.35
+          Flickable {
+            id: resultFlick
+            anchors.fill: parent
+            contentHeight: resultColumn.implicitHeight + Style.space(16)
+            contentWidth: width
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+
+            ColumnLayout {
+              id: resultColumn
+              x: Style.space(4)
+              y: Style.space(8)
+              width: resultFlick.width - Style.space(8)
+              spacing: Style.space(14)
+
+              Repeater {
+                model: root.resultGroups
+
+                ColumnLayout {
+                  id: verseGroup
+                  required property var modelData
+                  Layout.fillWidth: true
+                  spacing: Style.space(4)
+
+                  Text {
+                    text: verseGroup.modelData.ref
+                    color: Color.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    font.letterSpacing: 0.5
+                  }
+
+                  Text {
+                    Layout.fillWidth: true
+                    text: verseGroup.modelData.body
+                    wrapMode: Text.Wrap
+                    textFormat: Text.PlainText
+                    color: Color.popups.text
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.body
+                    lineHeight: 1.4
+                  }
+                }
+              }
+            }
+
+            QQC.ScrollBar.vertical: QQC.ScrollBar {
+              policy: QQC.ScrollBar.AsNeeded
+            }
           }
 
-          QQC.ScrollBar.vertical: QQC.ScrollBar {
-            policy: QQC.ScrollBar.AsNeeded
+          // Fade at the bottom edge hints that the text continues below.
+          Rectangle {
+            visible: resultFlick.contentHeight > resultFlick.height + 1 && !resultFlick.atYEnd
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: Style.space(18)
+            color: "transparent"
+            gradient: Gradient {
+              GradientStop { position: 0; color: "transparent" }
+              GradientStop { position: 1; color: Color.popups.background }
+            }
           }
         }
 
         // Copy row
         RowLayout {
-          visible: !root.isLoading && root.resultText !== ""
+          visible: !root.isLoading && root.resultGroups.length > 0
           Layout.fillWidth: true
           spacing: Style.space(8)
 
           Text {
             visible: lastQuery !== ""
             text: lastQuery
-            color: Qt.darker(Color.popups.text, 1.5)
+            color: Color.muted
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             font.italic: true
@@ -242,20 +297,19 @@ BarWidget {
             Layout.fillWidth: true
           }
 
+          Text {
+            id: copyFeedback
+            visible: false
+            text: "Copied"
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
           Button {
             text: "Copy"
             onClicked: root.copyResult()
           }
-        }
-
-        Text {
-          id: copyFeedback
-          visible: false
-          text: "Copied to clipboard"
-          color: Color.accent
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          Layout.alignment: Qt.AlignRight
         }
 
         Timer {
