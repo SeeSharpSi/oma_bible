@@ -117,45 +117,38 @@ BarWidget {
         spacing: Style.space(10)
 
         // Header
-        ColumnLayout {
+        RowLayout {
           Layout.fillWidth: true
-          spacing: Style.space(8)
+          spacing: Style.space(6)
 
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(6)
-
-            Text {
-              text: "Bible"
-              color: Color.popups.text
-              font.family: Style.font.family
-              font.pixelSize: Style.font.title
-              font.bold: true
-              Layout.alignment: Qt.AlignVCenter
-            }
-            Text {
-              text: "BSB"
-              color: Color.muted
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-              font.letterSpacing: 1
-              font.capitalization: Font.SmallCaps
-              Layout.alignment: Qt.AlignVCenter
-              Layout.topMargin: Style.space(3)
-            }
-            Item { Layout.fillWidth: true }
-
-            // Close affordance
-            Button {
-              text: "✕"
-              implicitWidth: Style.space(28)
-              implicitHeight: Style.space(28)
-              fontSize: Style.font.caption
-              onClicked: root.close()
-            }
+          Text {
+            text: "Bible"
+            color: Color.popups.text
+            font.family: Style.font.family
+            font.pixelSize: Style.font.title
+            font.bold: true
+            Layout.alignment: Qt.AlignVCenter
           }
+          Text {
+            text: "BSB"
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            font.letterSpacing: 1
+            font.capitalization: Font.SmallCaps
+            Layout.alignment: Qt.AlignVCenter
+            Layout.topMargin: Style.space(3)
+          }
+          Item { Layout.fillWidth: true }
 
-          PanelSeparator {}
+          // Close affordance
+          Button {
+            text: "✕"
+            implicitWidth: Style.space(28)
+            implicitHeight: Style.space(28)
+            fontSize: Style.font.caption
+            onClicked: root.close()
+          }
         }
 
         // Search row
@@ -262,6 +255,16 @@ BarWidget {
 
             QQC.ScrollBar.vertical: QQC.ScrollBar {
               policy: QQC.ScrollBar.AsNeeded
+              implicitWidth: Style.space(6)
+              background: null
+              contentItem: Rectangle {
+                implicitWidth: parent.implicitWidth
+                radius: width / 2
+                color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.28)
+                opacity: parent.active ? 1.0 : 0.45
+
+                Behavior on opacity { NumberAnimation { duration: 120 } }
+              }
             }
           }
 
