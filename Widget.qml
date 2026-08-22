@@ -286,7 +286,7 @@ BarWidget {
         // Footer hint
         Text {
           Layout.fillWidth: true
-          text: "Powered by BSB • bsb script handles abbreviations (Jn, Ps, 1Jn, etc.)"
+          text: "bsb script handles abbreviations (Jn, Ps, 1Jn, etc.)"
           wrapMode: Text.Wrap
           color: Qt.darker(Color.popups.text, 1.8)
           font.family: Style.font.family
