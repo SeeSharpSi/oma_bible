@@ -173,13 +173,6 @@ BarWidget {
           opacity: 0.85
         }
 
-        Rectangle {
-          Layout.fillWidth: true
-          height: 1
-          color: Color.popups.text
-          opacity: 0.12
-        }
-
         // Status / loading
         Text {
           visible: root.isLoading
@@ -271,28 +264,6 @@ BarWidget {
           onTriggered: copyFeedback.visible = false
         }
 
-        // Empty state
-        Text {
-          visible: !root.isLoading && root.resultText === "" && root.errorText === ""
-          Layout.fillWidth: true
-          text: "Type a verse above and press Enter."
-          wrapMode: Text.Wrap
-          color: Qt.darker(Color.popups.text, 1.6)
-          font.family: Style.font.family
-          font.pixelSize: Style.font.body
-          opacity: 0.9
-        }
-
-        // Footer hint
-        Text {
-          Layout.fillWidth: true
-          text: "bsb script handles abbreviations (Jn, Ps, 1Jn, etc.)"
-          wrapMode: Text.Wrap
-          color: Qt.darker(Color.popups.text, 1.8)
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          opacity: 0.6
-        }
       }
     }
   }
