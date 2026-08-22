@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "cassian.bible",
+  "name": "Bible",
+  "version": "1.0.0",
+  "author": "cassian",
+  "description": "Lookup BSB verses from the top bar",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Bible",
+    "description": "Lookup Berean Standard Bible verses",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

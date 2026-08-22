@@ -37,6 +37,7 @@ fi
 # ---------- CLI flags ----------
 NO_REF=0
 NO_NEWLINE=0
+GROUPED=0
 FILTERED_ARGS=()
 for arg in "$@"; do
   case "$arg" in
@@ -66,6 +67,9 @@ for arg in "$@"; do
     --)
       continue
       ;;
+    --grouped)
+      GROUPED=1
+      ;;
     -nj|-jn)
       NO_REF=1
       NO_NEWLINE=1
@@ -87,7 +91,8 @@ for arg in "$@"; do
             echo "Usage: $0 [-n|--no-reference] [-j|--join] <book> <chapter[:verse][-chapter[:verse]]> [ <book> <chapter> ... ]" >&2
             echo "Options:" >&2
             echo "  -n, --no-reference       omit chapter:verse prefix from output" >&2
-            echo "  -j, --join               join multiple verses on one line (no newlines between verses)" >&2
+      echo "  -j, --join               join multiple verses on one line (no newlines between verses)" >&2
+      echo "  --grouped                emit a \\x1e-prefixed reference header line per book group, and use smart verse numbers (verse-only within a chapter, chapter:verse on the first verse of each later chapter)" >&2
             echo "  -h, --help               show this help" >&2
             exit 0
             ;;
@@ -131,8 +136,17 @@ fi
 
 # buffer for joined output
 ALL_LINES=()
+GROUP_HEADER=""
+GROUP_PENDING=0
+GROUP_LINES=()
 emit_result() {
   local _res="$1"
+  if (( GROUPED )); then
+    while IFS= read -r _line; do
+      [[ -n "$_line" ]] && GROUP_LINES+=("$_line")
+    done <<< "$_res"
+    return
+  fi
   if (( NO_NEWLINE )); then
     while IFS= read -r _line; do
       [[ -n "$_line" ]] && ALL_LINES+=("$_line")
@@ -140,6 +154,52 @@ emit_result() {
   else
     echo "$_res"
   fi
+}
+
+# Print the buffered group with smart verse references:
+#   - single verse in group: keep "chapter:verse"
+#   - multiple verses in one chapter: verse number only
+#   - multiple verses spanning chapters: first verse of each chapter
+#     after the first gets "chapter:verse", others verse only
+flush_group() {
+  if (( ${#GROUP_LINES[@]} == 0 )); then
+    GROUP_PENDING=0
+    GROUP_HEADER=""
+    return
+  fi
+  if (( GROUP_PENDING )); then
+    printf '\036%s\n' "$GROUP_HEADER"
+    GROUP_PENDING=0
+  fi
+  local n=${#GROUP_LINES[@]}
+  local prev_ch="" first=1
+  local _line _ch _v _rest _out
+  for _line in "${GROUP_LINES[@]}"; do
+    _out=""
+    if [[ "$_line" =~ ^([0-9]+):([0-9]+)[[:space:]](.*)$ ]]; then
+      _ch="${BASH_REMATCH[1]}"
+      _v="${BASH_REMATCH[2]}"
+      _rest="${BASH_REMATCH[3]}"
+      if (( n == 1 )); then
+        _out="$_line"
+      elif [[ "$_ch" != "$prev_ch" && $first -eq 0 ]]; then
+        _out="$_ch:$_v $_rest"
+      else
+        _out="$_v $_rest"
+      fi
+      prev_ch="$_ch"
+    else
+      _out="$_line"
+    fi
+    first=0
+    if (( NO_NEWLINE )); then
+      ALL_LINES+=("$_out")
+    else
+      echo "$_out"
+    fi
+  done
+  GROUP_LINES=()
+  GROUP_HEADER=""
 }
 
 # ---------- book mapping ----------
@@ -408,7 +468,7 @@ query_spec() {
 
   # execute
   local result
-  result=$(sqlite3 "$DB" "$sql")
+  result=$(sqlite3 "file:$DB?mode=ro" "$sql")
   if [[ -z "$result" ]]; then
     echo "warning: no verses found for book $book spec '$spec'" >&2
   else
@@ -452,6 +512,9 @@ output_all=""
 
 # we will directly output to stdout as we go, but track if any output
 while (( idx < ${#TOKENS[@]} )); do
+  # emit the previous group before starting a new one
+  flush_group
+
   # find book at idx
   book_info=$(find_book_at "$idx")
   if [[ -z "$book_info" ]]; then
@@ -477,10 +540,18 @@ while (( idx < ${#TOKENS[@]} )); do
   spec_start=$search_start
   spec_count=$((spec_end - spec_start))
 
+  if (( GROUPED )); then
+    GROUP_HEADER="${TOKENS[@]:idx:book_len}"
+    if (( spec_count > 0 )); then
+      GROUP_HEADER="$GROUP_HEADER ${TOKENS[@]:spec_start:spec_count}"
+    fi
+    GROUP_PENDING=1
+  fi
+
   if (( spec_count == 0 )); then
     echo "warning: no chapter/verse given for book '${TOKENS[idx]}' (book $book_num), showing whole book" >&2
     # whole book
-    _wb_result=$(sqlite3 "$DB" "SELECT $SELECT_EXPR FROM verses WHERE book=$book_num ORDER BY chapter, verse;")
+    _wb_result=$(sqlite3 "file:$DB?mode=ro" "SELECT $SELECT_EXPR FROM verses WHERE book=$book_num ORDER BY chapter, verse;")
     if [[ -n "$_wb_result" ]]; then
       emit_result "$_wb_result"
     fi
@@ -558,6 +629,8 @@ if (( NO_NEWLINE && ${#ALL_LINES[@]} > 0 )); then
   # join with single space
   IFS=' ' echo "${ALL_LINES[*]}"
 fi
+
+flush_group
 
 if (( found_any == 0 )); then
   exit 1
