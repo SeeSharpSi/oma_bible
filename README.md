@@ -16,6 +16,7 @@ your top bar, type a verse reference, see the text. Powered by the
   `chapter:verse` back
 - Multiple references group under their own reference headers, separated by
   blank lines
+- Open results in a dedicated reading overlay
 - Copy button puts the reference header(s) + verses on the clipboard
 - Whole chapters, chapter ranges, cross-chapter ranges, comma/semicolon lists
 
@@ -41,6 +42,7 @@ omarchy plugin remove cassian.bible
 ```bash
 omarchy-shell cassian.bible open
 omarchy-shell cassian.bible lookup "John 3:16"
+omarchy-shell cassian.bible openResult
 omarchy-shell cassian.bible close
 ```
 

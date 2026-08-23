@@ -3,6 +3,7 @@ import QtQuick.Controls as QQC
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 
@@ -17,13 +18,20 @@ BarWidget {
   }
 
   property bool opened: false
+  property bool readerOpened: false
   property string resultText: ""
   property string copyText: ""
   property string errorText: ""
   property bool isLoading: false
   property string lastQuery: ""
+  property bool copyConfirmed: false
+
+  readonly property color fg: Color.popups.text
+  readonly property color dimText: Qt.darker(fg, 1.4)
+  readonly property color dimmerText: Qt.darker(fg, 1.75)
 
   function open() {
+    readerOpened = false
     opened = true
     Qt.callLater(function() {
       if (inputField) {
@@ -32,9 +40,27 @@ BarWidget {
       }
     })
   }
-  function close() { opened = false }
+  function close() {
+    opened = false
+    readerOpened = false
+  }
   function toggle() { opened ? close() : open() }
   function closeForPopoutSwitch() { close() }
+
+  function openReader() {
+    if (!resultText) return
+    opened = false
+    readerOpened = true
+    overlayReader.contentY = 0
+    Qt.callLater(function() {
+      if (readerOpened) readerKeyCatcher.forceActiveFocus()
+    })
+  }
+
+  function refresh() {
+    if (isLoading || inputField.text.trim() === "") return
+    lookup()
+  }
 
   readonly property bool popoutSwitchClosing: false
 
@@ -59,6 +85,7 @@ BarWidget {
     }
     lastQuery = q
     isLoading = true
+    panelReader.contentY = 0
     resultText = ""
     copyText = ""
     errorText = ""
@@ -75,7 +102,7 @@ BarWidget {
     // Try wl-copy; detaches, no need to wait
     if (bar) bar.run("printf %s " + quoted + " | (wl-copy 2>/dev/null || xclip -selection clipboard 2>/dev/null || cat >/dev/null); echo copied")
     // Brief feedback
-    copyFeedback.visible = true
+    copyConfirmed = true
     copyFeedbackTimer.restart()
   }
 
@@ -93,7 +120,6 @@ BarWidget {
     onPressed: function(btn) { root.toggle() }
   }
 
-  // KeyboardPanel gives proper layer-shell focus handling for TextField
   KeyboardPanel {
     id: panel
     anchorItem: button
@@ -102,7 +128,7 @@ BarWidget {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: fittedContentWidth(Style.space(520))
-    contentHeight: fittedContentHeight(mainColumn.implicitHeight + Style.space(8))
+    contentHeight: fittedContentHeight(mainColumn.implicitHeight, Style.space(620))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -113,45 +139,52 @@ BarWidget {
       ColumnLayout {
         id: mainColumn
         anchors.fill: parent
-        anchors.margins: Style.spacing.sm
-        spacing: Style.space(10)
+        spacing: Style.space(11)
 
-        // Header
         RowLayout {
           Layout.fillWidth: true
-          spacing: Style.space(6)
+          spacing: Style.space(7)
 
           Text {
-            text: "Bible"
-            color: Color.popups.text
+            text: "BIBLE"
+            color: root.fg
             font.family: Style.font.family
             font.pixelSize: Style.font.title
             font.bold: true
-            Layout.alignment: Qt.AlignVCenter
           }
+
           Text {
             text: "BSB"
-            color: Color.muted
+            color: root.dimmerText
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             font.letterSpacing: 1
-            font.capitalization: Font.SmallCaps
             Layout.alignment: Qt.AlignVCenter
-            Layout.topMargin: Style.space(3)
           }
+
           Item { Layout.fillWidth: true }
 
-          // Close affordance
-          Button {
-            text: "✕"
-            implicitWidth: Style.space(28)
-            implicitHeight: Style.space(28)
-            fontSize: Style.font.caption
+          PanelActionButton {
+            iconText: "󰑐"
+            foreground: root.fg
+            tooltipText: "Search again"
+            enabled: !root.isLoading && inputField.text.trim() !== ""
+            onClicked: root.refresh()
+          }
+
+          PanelActionButton {
+            iconText: "󰅙"
+            foreground: root.fg
+            tooltipText: "Close"
             onClicked: root.close()
           }
         }
 
-        // Search row
+        PanelSeparator {
+          Layout.fillWidth: true
+          foreground: root.fg
+        }
+
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.space(8)
@@ -159,33 +192,29 @@ BarWidget {
           TextField {
             id: inputField
             Layout.fillWidth: true
-            placeholderText: "John 3:16  •  Ps 23  •  Gen 1:1-3  •  Rom 8:28"
+            placeholderText: "Search a reference, e.g. John 3:16"
             font.family: Style.font.family
             font.pixelSize: Style.font.body
-            // Enter triggers lookup
             onAccepted: root.lookup()
             Keys.onEscapePressed: root.close()
-            // Select all on focus
             onActiveFocusChanged: if (activeFocus) selectAll()
           }
 
           Button {
-            text: root.isLoading ? "…" : "Go"
-            enabled: !root.isLoading
-            implicitWidth: Style.space(52)
+            text: root.isLoading ? "Searching" : "Search"
+            bordered: true
+            enabled: !root.isLoading && inputField.text.trim() !== ""
             onClicked: root.lookup()
           }
         }
 
-        // Status / loading
         Text {
           visible: root.isLoading
           Layout.fillWidth: true
-          text: "Looking up…"
-          color: Qt.darker(Color.popups.text, 1.2)
+          text: "Looking up " + root.lastQuery + "..."
+          color: root.dimText
           font.family: Style.font.family
-          font.pixelSize: Style.font.body
-          font.italic: true
+          font.pixelSize: Style.font.caption
         }
 
         Text {
@@ -198,119 +227,56 @@ BarWidget {
           font.pixelSize: Style.font.body
         }
 
-        // Result area with scroll: each reference group gets a styled
-        // header followed by its verses.
+        PanelSeparator {
+          visible: !root.isLoading && root.resultGroups.length > 0
+          Layout.fillWidth: true
+          foreground: root.fg
+        }
+
         Item {
           visible: !root.isLoading && root.resultGroups.length > 0
           Layout.fillWidth: true
-          Layout.preferredHeight: Math.min(Math.max(resultColumn.implicitHeight + Style.space(16), Style.space(80)), Style.space(380))
-          Layout.maximumHeight: Style.space(380)
+          Layout.preferredHeight: Math.min(Math.max(panelReader.contentHeight, Style.space(96)), Style.space(360))
+          Layout.maximumHeight: Style.space(360)
 
-          Flickable {
-            id: resultFlick
+          VerseReader {
+            id: panelReader
             anchors.fill: parent
-            contentHeight: resultColumn.implicitHeight + Style.space(16)
-            contentWidth: width
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-
-            ColumnLayout {
-              id: resultColumn
-              x: Style.space(4)
-              y: Style.space(8)
-              width: resultFlick.width - Style.space(8)
-              spacing: Style.space(14)
-
-              Repeater {
-                model: root.resultGroups
-
-                ColumnLayout {
-                  id: verseGroup
-                  required property var modelData
-                  Layout.fillWidth: true
-                  spacing: Style.space(4)
-
-                  Text {
-                    text: verseGroup.modelData.ref
-                    color: Color.muted
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.caption
-                    font.bold: true
-                    font.letterSpacing: 0.5
-                  }
-
-                  Text {
-                    Layout.fillWidth: true
-                    text: verseGroup.modelData.body
-                    wrapMode: Text.Wrap
-                    textFormat: Text.PlainText
-                    color: Color.popups.text
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.body
-                    lineHeight: 1.4
-                  }
-                }
-              }
-            }
-
-            QQC.ScrollBar.vertical: QQC.ScrollBar {
-              policy: QQC.ScrollBar.AsNeeded
-              implicitWidth: Style.space(6)
-              background: null
-              contentItem: Rectangle {
-                implicitWidth: parent.implicitWidth
-                radius: width / 2
-                color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.28)
-                opacity: parent.active ? 1.0 : 0.45
-
-                Behavior on opacity { NumberAnimation { duration: 120 } }
-              }
-            }
-          }
-
-          // Fade at the bottom edge hints that the text continues below.
-          Rectangle {
-            visible: resultFlick.contentHeight > resultFlick.height + 1 && !resultFlick.atYEnd
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: Style.space(18)
-            color: "transparent"
-            gradient: Gradient {
-              GradientStop { position: 0; color: "transparent" }
-              GradientStop { position: 1; color: Color.popups.background }
-            }
+            groups: root.resultGroups
+            foreground: root.fg
+            muted: root.dimText
           }
         }
 
-        // Copy row
+        PanelSeparator {
+          visible: !root.isLoading && root.resultGroups.length > 0
+          Layout.fillWidth: true
+          foreground: root.fg
+        }
+
         RowLayout {
           visible: !root.isLoading && root.resultGroups.length > 0
           Layout.fillWidth: true
           spacing: Style.space(8)
 
           Text {
-            visible: lastQuery !== ""
-            text: lastQuery
-            color: Color.muted
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.italic: true
-            elide: Text.ElideRight
-            Layout.fillWidth: true
-          }
-
-          Text {
-            id: copyFeedback
-            visible: false
+            visible: root.copyConfirmed
             text: "Copied"
             color: Color.accent
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
           }
 
+          Item { Layout.fillWidth: true }
+
+          Button {
+            text: "Open"
+            onClicked: root.openReader()
+          }
+
           Button {
             text: "Copy"
+            bordered: true
             onClicked: root.copyResult()
           }
         }
@@ -318,9 +284,210 @@ BarWidget {
         Timer {
           id: copyFeedbackTimer
           interval: 1800
-          onTriggered: copyFeedback.visible = false
+          onTriggered: root.copyConfirmed = false
+        }
+      }
+    }
+  }
+
+  component VerseReader: Flickable {
+    id: verseReader
+
+    required property var groups
+    required property color foreground
+    required property color muted
+
+    contentWidth: width
+    contentHeight: verseColumn.implicitHeight + Style.space(8)
+    clip: true
+    boundsBehavior: Flickable.StopAtBounds
+    interactive: contentHeight > height
+
+    ColumnLayout {
+      id: verseColumn
+      x: Style.space(4)
+      y: Style.space(4)
+      width: verseReader.width - Style.space(12)
+      spacing: Style.space(16)
+
+      Repeater {
+        model: verseReader.groups
+
+        ColumnLayout {
+          id: verseGroup
+          required property var modelData
+          Layout.fillWidth: true
+          spacing: Style.space(5)
+
+          Text {
+            text: verseGroup.modelData.ref
+            color: verseReader.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 0.6
+          }
+
+          Text {
+            Layout.fillWidth: true
+            text: verseGroup.modelData.body
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            color: verseReader.foreground
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+            lineHeight: 1.45
+          }
+        }
+      }
+    }
+
+    QQC.ScrollBar.vertical: QQC.ScrollBar {
+      policy: QQC.ScrollBar.AsNeeded
+      implicitWidth: Style.space(10)
+      background: null
+      contentItem: Rectangle {
+        implicitWidth: parent.implicitWidth
+        radius: width / 2
+        color: Qt.rgba(verseReader.foreground.r, verseReader.foreground.g, verseReader.foreground.b, 0.3)
+        opacity: parent.active ? 1 : 0.4
+
+        Behavior on opacity { NumberAnimation { duration: 120 } }
+      }
+    }
+  }
+
+  PanelWindow {
+    id: readerOverlay
+
+    screen: panel.screen
+    visible: root.readerOpened
+    anchors { top: true; bottom: true; left: true; right: true }
+    color: "transparent"
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "cassian-bible-reader"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: root.readerOpened
+      ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+
+    Rectangle {
+      anchors.fill: parent
+      color: Qt.rgba(0, 0, 0, 0.7)
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.AllButtons
+      onClicked: root.close()
+    }
+
+    Item {
+      id: readerKeyCatcher
+      anchors.fill: parent
+      focus: true
+      Keys.onEscapePressed: root.close()
+
+      BorderSurface {
+        id: readerCard
+        anchors.centerIn: parent
+        width: Math.min(parent.width - Style.space(32), Style.space(760))
+        height: Math.min(parent.height - Style.space(48),
+          Math.max(Style.space(280), overlayReader.contentHeight + Style.space(120)))
+        color: Color.popups.background
+        borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+        radius: Style.cornerRadius
+        padding: Style.spacing.popupPadding
+
+        MouseArea {
+          anchors.fill: parent
+          acceptedButtons: Qt.AllButtons
+          onClicked: {}
         }
 
+        ColumnLayout {
+          anchors.fill: parent
+          anchors.topMargin: readerCard.contentTopInset
+          anchors.rightMargin: readerCard.contentRightInset
+          anchors.bottomMargin: readerCard.contentBottomInset
+          anchors.leftMargin: readerCard.contentLeftInset
+          spacing: Style.space(12)
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(8)
+
+            Text {
+              text: "BIBLE"
+              color: root.fg
+              font.family: Style.font.family
+              font.pixelSize: Style.font.title
+              font.bold: true
+            }
+
+            Text {
+              Layout.fillWidth: true
+              text: root.lastQuery
+              color: root.dimmerText
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+
+            PanelActionButton {
+              iconText: "󰅙"
+              foreground: root.fg
+              tooltipText: "Close"
+              onClicked: root.close()
+            }
+          }
+
+          PanelSeparator {
+            Layout.fillWidth: true
+            foreground: root.fg
+          }
+
+          VerseReader {
+            id: overlayReader
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            groups: root.resultGroups
+            foreground: root.fg
+            muted: root.dimText
+          }
+
+          PanelSeparator {
+            Layout.fillWidth: true
+            foreground: root.fg
+          }
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(8)
+
+            Text {
+              text: "Berean Standard Bible"
+              color: root.dimmerText
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Text {
+              visible: root.copyConfirmed
+              text: "Copied"
+              color: Color.accent
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+
+            Button {
+              text: "Copy"
+              bordered: true
+              onClicked: root.copyResult()
+            }
+          }
+        }
       }
     }
   }
@@ -393,6 +560,7 @@ BarWidget {
     function state(): string {
       return JSON.stringify({
         opened: root.opened,
+        readerOpened: root.readerOpened,
         result: root.resultText,
         error: root.errorText,
         loading: root.isLoading,
@@ -406,6 +574,7 @@ BarWidget {
       root.open()
       Qt.callLater(root.lookup)
     }
+    function openResult(): void { root.openReader() }
     function copy(): void { root.copyResult() }
   }
 }
