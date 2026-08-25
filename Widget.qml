@@ -57,11 +57,6 @@ BarWidget {
     })
   }
 
-  function refresh() {
-    if (isLoading || inputField.text.trim() === "") return
-    lookup()
-  }
-
   readonly property bool popoutSwitchClosing: false
 
   // Display structure only: resultText lays each group out as a reference
@@ -163,21 +158,6 @@ BarWidget {
           }
 
           Item { Layout.fillWidth: true }
-
-          PanelActionButton {
-            iconText: "󰑐"
-            foreground: root.fg
-            tooltipText: "Search again"
-            enabled: !root.isLoading && inputField.text.trim() !== ""
-            onClicked: root.refresh()
-          }
-
-          PanelActionButton {
-            iconText: "󰅙"
-            foreground: root.fg
-            tooltipText: "Close"
-            onClicked: root.close()
-          }
         }
 
         PanelSeparator {
@@ -431,13 +411,6 @@ BarWidget {
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
-            }
-
-            PanelActionButton {
-              iconText: "󰅙"
-              foreground: root.fg
-              tooltipText: "Close"
-              onClicked: root.close()
             }
           }
 
