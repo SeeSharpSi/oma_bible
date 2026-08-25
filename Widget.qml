@@ -25,6 +25,7 @@ BarWidget {
   property bool isLoading: false
   property string lastQuery: ""
   property bool copyConfirmed: false
+  property int readerFontLevel: 0
 
   readonly property color fg: Color.popups.text
   readonly property color dimText: Qt.darker(fg, 1.4)
@@ -276,6 +277,8 @@ BarWidget {
     required property var groups
     required property color foreground
     required property color muted
+    property int fontLevel: 0
+    readonly property real _fontScale: fontLevel === 1 ? 1.25 : fontLevel === 2 ? 1.5 : 1.0
 
     contentWidth: width
     contentHeight: verseColumn.implicitHeight + Style.space(8)
@@ -303,7 +306,7 @@ BarWidget {
             text: verseGroup.modelData.ref
             color: verseReader.muted
             font.family: Style.font.family
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Math.round(Style.font.caption * verseReader._fontScale)
             font.bold: true
             font.letterSpacing: 0.6
           }
@@ -315,7 +318,7 @@ BarWidget {
             textFormat: Text.PlainText
             color: verseReader.foreground
             font.family: Style.font.family
-            font.pixelSize: Style.font.body
+            font.pixelSize: Math.round(Style.font.body * verseReader._fontScale)
             lineHeight: 1.45
           }
         }
@@ -412,6 +415,43 @@ BarWidget {
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
             }
+
+            RowLayout {
+              spacing: Style.space(4)
+
+              Button {
+                text: "A"
+                fontFamily: Style.font.family
+                fontSize: Style.font.body
+                selected: root.readerFontLevel === 0
+                onClicked: root.readerFontLevel = 0
+                tooltipText: "Default size"
+                horizontalPadding: Style.space(6)
+                verticalPadding: Style.space(4)
+              }
+
+              Button {
+                text: "A"
+                fontFamily: Style.font.family
+                fontSize: Math.round(Style.font.body * 1.25)
+                selected: root.readerFontLevel === 1
+                onClicked: root.readerFontLevel = 1
+                tooltipText: "Larger text"
+                horizontalPadding: Style.space(6)
+                verticalPadding: Style.space(4)
+              }
+
+              Button {
+                text: "A"
+                fontFamily: Style.font.family
+                fontSize: Math.round(Style.font.body * 1.5)
+                selected: root.readerFontLevel === 2
+                onClicked: root.readerFontLevel = 2
+                tooltipText: "Largest text"
+                horizontalPadding: Style.space(6)
+                verticalPadding: Style.space(4)
+              }
+            }
           }
 
           PanelSeparator {
@@ -426,6 +466,7 @@ BarWidget {
             groups: root.resultGroups
             foreground: root.fg
             muted: root.dimText
+            fontLevel: root.readerFontLevel
           }
 
           PanelSeparator {
