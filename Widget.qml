@@ -371,7 +371,7 @@ BarWidget {
             spacing: Style.space(8)
 
             Text {
-              text: "BIBLE"
+              text: "BSB"
               color: root.fg
               font.family: Style.font.family
               font.pixelSize: Style.font.title
@@ -380,6 +380,7 @@ BarWidget {
 
             Text {
               Layout.fillWidth: true
+              horizontalAlignment: Text.AlignHCenter
               text: root.lastQuery
               color: root.dimmerText
               font.family: Style.font.family
@@ -425,51 +426,40 @@ BarWidget {
             }
           }
 
-          PanelSeparator {
-            Layout.fillWidth: true
-            foreground: root.fg
-          }
-
-          VerseReader {
-            id: overlayReader
+          Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            groups: root.resultGroups
-            foreground: root.fg
-            muted: root.dimText
-            fontLevel: root.readerFontLevel
-          }
 
-          PanelSeparator {
-            Layout.fillWidth: true
-            foreground: root.fg
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(8)
-
-            Text {
-              text: "Berean Standard Bible"
-              color: root.dimmerText
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
+            VerseReader {
+              id: overlayReader
+              anchors.fill: parent
+              groups: root.resultGroups
+              foreground: root.fg
+              muted: root.dimText
+              fontLevel: root.readerFontLevel
             }
 
-            Item { Layout.fillWidth: true }
+            RowLayout {
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.bottom: parent.bottom
+              spacing: Style.space(8)
 
-            Text {
-              visible: root.copyConfirmed
-              text: "Copied"
-              color: Color.accent
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-            }
+              Text {
+                visible: root.copyConfirmed
+                text: "Copied"
+                color: Color.accent
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
 
-            Button {
-              text: "Copy"
-              bordered: true
-              onClicked: root.copyResult()
+              Item { Layout.fillWidth: true }
+
+              Button {
+                text: "Copy"
+                bordered: true
+                onClicked: root.copyResult()
+              }
             }
           }
         }
