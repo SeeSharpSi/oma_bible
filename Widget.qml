@@ -139,35 +139,6 @@ BarWidget {
 
         RowLayout {
           Layout.fillWidth: true
-          spacing: Style.space(7)
-
-          Text {
-            text: "BIBLE"
-            color: root.fg
-            font.family: Style.font.family
-            font.pixelSize: Style.font.title
-            font.bold: true
-          }
-
-          Text {
-            text: "BSB"
-            color: root.dimmerText
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.letterSpacing: 1
-            Layout.alignment: Qt.AlignVCenter
-          }
-
-          Item { Layout.fillWidth: true }
-        }
-
-        PanelSeparator {
-          Layout.fillWidth: true
-          foreground: root.fg
-        }
-
-        RowLayout {
-          Layout.fillWidth: true
           spacing: Style.space(8)
 
           TextField {
