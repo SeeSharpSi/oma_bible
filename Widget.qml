@@ -287,7 +287,7 @@ BarWidget {
       id: verseColumn
       x: Style.space(4)
       y: Style.space(4)
-      width: verseReader.width - Style.space(12)
+      width: verseReader.width - Style.space(20)
       spacing: Style.space(16)
 
       Repeater {
@@ -370,7 +370,7 @@ BarWidget {
       BorderSurface {
         id: readerCard
         anchors.centerIn: parent
-        width: Math.min(parent.width - Style.space(32), Style.space(760))
+        width: Math.min(parent.width - Style.space(32), Style.space(820))
         height: Math.min(parent.height - Style.space(48),
           Math.max(Style.space(280), overlayReader.contentHeight + Style.space(120)))
         color: Color.popups.background
