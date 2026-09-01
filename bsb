@@ -478,15 +478,9 @@ query_spec() {
 
 # ---------- preprocess input ----------
 INPUT_RAW="${FILTERED_ARGS[*]}"
-# Normalize word/Roman ordinals before digit-letter spacing (fixes 1st/2nd/3rd, I/II/III, First/Second/Third)
+# Normalize word ordinals before digit-letter spacing (fixes 1st/2nd/3rd, First/Second/Third)
 # Order: glued forms (longest first) interleaved with conversion to avoid double-split
 PROCESSED=$(echo "$INPUT_RAW" | sed -E '
-  s/\bIII([A-Za-z])/III \1/gI
-  s/\bIII\b/3/gI
-  s/\bII([A-Za-z])/II \1/gI
-  s/\bII\b/2/gI
-  s/\bI([A-Za-z])/I \1/gI
-  s/\bI\b/1/gI
   s/\bFirst([A-Za-z])/First \1/gI
   s/\bSecond([A-Za-z])/Second \1/gI
   s/\bThird([A-Za-z])/Third \1/gI
@@ -504,6 +498,41 @@ PROCESSED=$(echo "$INPUT_RAW" | sed -E '
 ')
 # collapse multiple spaces (sed already); now split into TOKENS
 read -ra TOKENS <<< "$PROCESSED"
+
+# ---------- context-aware Roman numeral handling ----------
+# Roman I/II/III are only converted to digits when the numeral plus the
+# following text forms a known numbered-book alias (e.g. "I Sam" -> "1 Sam",
+# "IJohn" -> "1 John"). This keeps book aliases that start with "I" intact,
+# such as Isaiah's "is"/"isa"/"isaiah".
+declare -A _ROMAN=([i]=1 [ii]=2 [iii]=3)
+_rt=()
+_rn=${#TOKENS[@]}
+for (( _ri=0; _ri<_rn; _ri++ )); do
+  _rlow=$(normalize "${TOKENS[_ri]}")
+  _rkey=""
+  if [[ -z "${BOOKS[$_rlow]+x}" ]]; then
+    # glued forms first: IJohn, IISam, IIISam
+    for _rp in iii ii i; do
+      if [[ "$_rlow" == "$_rp"* && ${#_rlow} -gt ${#_rp} ]]; then
+        _rk="${_ROMAN[$_rp]} ${_rlow:${#_rp}}"
+        if [[ -n "${BOOKS[$_rk]+x}" ]]; then
+          _rkey="$_rk"
+          break
+        fi
+      fi
+    done
+    # standalone I/II/III followed by a numbered-book name: "I Sam", "II Kings"
+    if [[ -z "$_rkey" && -n "${_ROMAN[$_rlow]+x}" ]] && (( _ri+1 < _rn )); then
+      _rnext=$(normalize "${TOKENS[_ri+1]}")
+      _rk="${_ROMAN[$_rlow]} ${_rnext}"
+      if [[ -n "${BOOKS[$_rk]+x}" ]]; then
+        _rkey="${_ROMAN[$_rlow]}"
+      fi
+    fi
+  fi
+  _rt+=("${_rkey:-${TOKENS[_ri]}}")
+done
+TOKENS=("${_rt[@]}")
 
 # ---------- main loop ----------
 idx=0
